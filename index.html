@@ -1081,8 +1081,8 @@ body.is-admin .admin-only { display: flex !important; }
 
       <button class="btn-login" onclick="doLogin()">Entrar</button>
 
-      <!-- credenciais de teste -->
-      <div style="margin-top:18px;padding:12px;background:rgba(240,165,0,0.06);border:1px solid rgba(240,165,0,0.15);border-radius:6px">
+      <!-- credenciais de teste (ocultas: o login agora e real via Supabase) -->
+      <div style="display:none;margin-top:18px;padding:12px;background:rgba(240,165,0,0.06);border:1px solid rgba(240,165,0,0.15);border-radius:6px">
         <div style="font-size:9px;font-weight:700;color:rgba(240,165,0,0.5);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Credenciais de acesso</div>
         <div style="display:flex;flex-direction:column;gap:5px">
           <div onclick="fillLogin('admin@vault.com','admin123')" style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:5px;cursor:pointer;transition:background .12s" onmouseover="this.style.background='rgba(240,165,0,0.08)'" onmouseout="this.style.background='rgba(255,255,255,0.03)'">
@@ -2038,6 +2038,15 @@ body.is-admin .admin-only { display: flex !important; }
 <!-- TOAST -->
 <div class="toast" id="toast"><div class="t-dot"></div><span id="toast-msg"></span></div>
 
+<!-- Supabase (backend real: login + dados compartilhados) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+  window.SUPA_URL = "https://gcwwohmiieyitkqmrmbl.supabase.co";
+  window.SUPA_KEY = "sb_publishable_NwukOEMdpnnf7CGU8OG1xw_nVyl1wMC";
+  try { window.sb = window.supabase.createClient(window.SUPA_URL, window.SUPA_KEY); }
+  catch(e){ console.error("Supabase init falhou:", e); }
+</script>
+
 <script>
 // ════════════════════════════════════════════════
 // CONSTANTS
@@ -2166,33 +2175,57 @@ function seedNotifs(){
 // AUTH
 // ════════════════════════════════════════════════
 
-function doLogin(){
+async function doLogin(){
   var em  = (document.getElementById("lem").value||"").trim().toLowerCase();
   var pw  = (document.getElementById("lsn").value||"").trim();
   var err = document.getElementById("lerr");
-  var ac  = ACCOUNTS[em];
-  if(ac && ac.pass === pw){
-    CU = Object.assign({},ac); CU.email = em; window.CU = CU;
-    err.style.display = "none";
-    document.getElementById("login").style.display  = "none";
-    document.getElementById("app").style.display    = "block";
-    initApp();
-  } else {
-    err.style.display = "block";
+  var btn = document.querySelector(".btn-login");
+  if(!window.sb){ err.textContent="Erro de conexão com o servidor. Recarregue a página."; err.style.display="block"; return; }
+  if(btn){ btn.disabled=true; btn.dataset.t=btn.textContent; btn.textContent="Entrando..."; }
+  try{
+    var res = await window.sb.auth.signInWithPassword({email:em,password:pw});
+    if(res.error){ err.textContent="E-mail ou senha incorretos. Verifique os dados abaixo."; err.style.display="block"; return; }
+    await afterLogin(res.data.user);
+  } catch(e){
+    err.textContent="Não foi possível entrar agora. Tente novamente."; err.style.display="block";
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent=btn.dataset.t||"Entrar"; }
   }
+}
+async function afterLogin(user){
+  var prof=null;
+  try{ var r=await window.sb.from("profiles").select("*").eq("id",user.id).single(); prof=r.data; }catch(e){}
+  CU = {};
+  CU.id    = user.id;
+  CU.email = user.email;
+  CU.name  = (prof&&prof.name) || (user.email||"").split("@")[0];
+  CU.role  = (prof&&prof.role) || "affiliate";
+  window.CU = CU;
+  document.getElementById("lerr").style.display="none";
+  document.getElementById("login").style.display  = "none";
+  document.getElementById("app").style.display    = "block";
+  initApp();
 }
 function fillLogin(em,pw){
   document.getElementById("lem").value = em;
   document.getElementById("lsn").value = pw;
   document.getElementById("lerr").style.display = "none";
 }
-function doLogout(){
-  CU = null;
+async function doLogout(){
+  try{ if(window.sb) await window.sb.auth.signOut(); }catch(e){}
+  CU = null; window.CU = null;
   document.getElementById("app").style.display   = "none";
   document.getElementById("login").style.display = "flex";
   document.getElementById("lem").value = "";
   document.getElementById("lsn").value = "";
 }
+// Mantem o login apos recarregar a pagina (sessao Supabase)
+(function(){
+  if(!window.sb) return;
+  window.sb.auth.getSession().then(function(res){
+    if(res && res.data && res.data.session){ afterLogin(res.data.session.user); }
+  });
+})();
 
 // ════════════════════════════════════════════════
 // INIT
@@ -3751,7 +3784,7 @@ function pfOpenModal(){
   var emailEl=document.getElementById('pf-email');
   if(nomeEl) nomeEl.value=pfData.nome||(CU?CU.name:'');
   if(paisEl) paisEl.value=pfData.pais||'';
-  if(emailEl&&CU) emailEl.value=Object.keys(ACCOUNTS).find(function(k){return ACCOUNTS[k].id===CU.id;})||'';
+  if(emailEl&&CU) emailEl.value=CU.email||'';
   if(badgeEl) badgeEl.classList.remove('show');
   var modalAv=document.getElementById('pf-modal-av');
   var modalImg=document.getElementById('pf-modal-img');
