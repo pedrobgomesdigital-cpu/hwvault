@@ -2303,9 +2303,7 @@ function initApp(){
     });
     localStorage.setItem("hwv_ver","2");
   }
-  bibAssets=window.loadShared?window.loadShared("bib",null):null;
-  if(!bibAssets){ var _lgb=null; try{_lgb=JSON.parse(localStorage.getItem('hwv5_admin_bib')||'null');}catch(e){} bibAssets=_lgb||load("bib",null)||[]; }
-  if(window.saveShared)window.saveShared("bib",bibAssets);
+  bibAssets=[]; // Biblioteca agora vem do banco (Supabase) — ver loadBibFromDB()
   meusCofre=load("cofre",null)||[]; save("cofre",meusCofre);
   solicitacoes=load("sols",null)||[]; save("sols",solicitacoes);
   chats=load("chats",null)||[]; save("chats",chats);
@@ -2321,6 +2319,7 @@ function initApp(){
     document.getElementById("adm-lbl")&&(document.getElementById("adm-lbl").style.display="none");
   }
   renderAll();
+  loadBibFromDB();
   if(window.spyInit) window.spyInit();
   if(CU.role==='admin') gestInit();
   pfInit();
@@ -2384,6 +2383,32 @@ function renderDash(){
 // ════════════════════════════════════════════════
 // BIBLIOTECA
 // ════════════════════════════════════════════════
+async function loadBibFromDB(){
+  if(!window.sb) return;
+  try{
+    var r = await window.sb.from('bib_assets').select('*').order('created_at',{ascending:false});
+    if(r.error){ console.error('loadBibFromDB', r.error); return; }
+    bibAssets = (r.data||[]).map(function(x){
+      return {
+        id: x.id,
+        nicho: x.niche, oferta: x.offer, tipo: x.type,
+        name: x.name, desc: x.descr||'', link: x.link||'#',
+        img: x.image||'', scale: x.scale||'',
+        lockPass: x.lock_pass||undefined,
+        lockUntil: x.lock_until? Number(x.lock_until):undefined,
+        lockMsg: x.lock_msg||undefined,
+        date: x.created_at? String(x.created_at).split('T')[0] : ''
+      };
+    });
+    if(typeof renderNichos==='function') renderNichos();
+    if(typeof renderDash==='function') renderDash();
+    if(bibNicho && bibOferta && typeof renderBibAtivos==='function') renderBibAtivos();
+    if(bibViewMode==='todos' && typeof renderBibTodos==='function') renderBibTodos();
+    if(typeof updateCounts==='function') updateCounts();
+  }catch(e){ console.error(e); }
+}
+window.loadBibFromDB=loadBibFromDB;
+
 function renderNichos(){
   document.getElementById("bib-nicho-grid").innerHTML=NICHOS.map(n=>{
     const cnt=bibAssets.filter(a=>a.nicho===n.id).length;
@@ -3468,7 +3493,7 @@ function bibOpenUploadModal(){
   setTimeout(bibAutoFillRows, 50);
 }
 
-function bibUploadBatch(){
+async function bibUploadBatch(){
   var nicho  =(document.getElementById('bib-up-nicho')||{value:''}).value;
   var oferta =(document.getElementById('bib-up-oferta')||{value:''}).value.trim();
   var tipo   =(document.getElementById('bib-up-tipo')||{value:'Ad'}).value;
@@ -3484,35 +3509,37 @@ function bibUploadBatch(){
   var valid = bibBatchRows.filter(function(r){ return r.name.trim() && r.link.trim(); });
   if(!valid.length){ toast2('Adicione pelo menos um ativo com nome e link.'); return; }
 
-  var today = new Date().toISOString().split('T')[0];
-  var added = 0;
-  valid.forEach(function(row){
-    var obj={
-      id: Date.now()+Math.random(),
-      nicho: nicho,
-      oferta: oferta,
-      tipo: tipo,
+  var lu = locked ? (Date.now()+dur*1000) : null;
+  var base = Date.now();
+  var objs = valid.map(function(row,i){
+    return {
+      id: base*1000 + i,
+      niche: nicho,
+      offer: oferta,
+      type: tipo,
       name: row.name.trim(),
-      desc: '',
+      descr: '',
       link: row.link.trim(),
-      img: row.img||'',
+      image: row.img||'',
       scale: escala,
-      date: today
+      lock_pass: locked ? pass : null,
+      lock_until: lu,
+      lock_msg: locked ? (msg||'Acesso exclusivo por tempo limitado.') : null,
+      created_by: (window.CU?window.CU.id:null)
     };
-    if(locked){
-      obj.lockPass  = pass;
-      obj.lockUntil = Date.now()+dur*1000;
-      obj.lockMsg   = msg||'Acesso exclusivo por tempo limitado.';
-    }
-    bibAssets.unshift(obj);
-    added++;
   });
 
-  if(window.saveShared)window.saveShared('bib', bibAssets);
+  if(!window.sb){ toast2('Sem conexão com o servidor.'); return; }
+  try{
+    var r = await window.sb.from('bib_assets').insert(objs);
+    if(r.error){ toast2('Erro ao publicar: '+r.error.message); return; }
+  }catch(e){ toast2('Erro ao publicar. Tente novamente.'); return; }
+
+  await loadBibFromDB();
   closeMo('mo-bib-upload');
   renderNichos();
   renderDash();
-  toast2(added+' ativo'+(added>1?'s':'')+' publicado'+(added>1?'s':'')+' na Biblioteca!','ok');
+  toast2(objs.length+' ativo'+(objs.length>1?'s':'')+' publicado'+(objs.length>1?'s':'')+' na Biblioteca!','ok');
 }
 
 
@@ -4802,12 +4829,16 @@ window.NICHO_IMG={"weight-loss":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABg
   // ── Biblioteca: excluir ──
   var _bibDelId=null;
   window.bibConfirmDelete=function(id){ _bibDelId=id; if(typeof openMo==='function')openMo('mo-bib-confirm'); };
-  window.bibDoDelete=function(){
+  window.bibDoDelete=async function(){
     if(_bibDelId==null){ if(typeof closeMo==='function')closeMo('mo-bib-confirm'); return; }
     var id=_bibDelId; _bibDelId=null;
-    bibAssets = bibAssets.filter(function(x){return String(x.id)!==String(id);});
-    if(window.saveShared)window.saveShared('bib',bibAssets);
-    window.removeFavByRef('bib',id);
+    if(!window.sb){ toast2('Sem conexão com o servidor.'); return; }
+    try{
+      var r=await window.sb.from('bib_assets').delete().eq('id',id);
+      if(r.error){ toast2('Erro ao excluir: '+r.error.message); return; }
+    }catch(e){ toast2('Erro ao excluir.'); return; }
+    if(window.loadBibFromDB) await window.loadBibFromDB();
+    window.removeFavByRef&&window.removeFavByRef('bib',id);
     if(typeof closeMo==='function')closeMo('mo-bib-confirm');
     try{ if(bibViewMode==='todos'&&typeof renderBibTodos==='function')renderBibTodos(); else if(typeof renderBibAtivos==='function')renderBibAtivos(); }catch(e){}
     if(typeof renderNichos==='function')renderNichos();
@@ -4827,16 +4858,26 @@ window.NICHO_IMG={"weight-loss":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABg
     var z=document.getElementById('bib-ed-paste-zone'); if(z){ z.innerHTML=a.img?('<img src="'+a.img+'" style="max-width:100%;max-height:150px;object-fit:contain">'):'<span style="font-size:12px;color:var(--t3)">Clique ou cole uma imagem</span>'; }
     if(typeof openMo==='function')openMo('mo-bib-edit');
   };
-  window.bibSaveEdit=function(){
+  window.bibSaveEdit=async function(){
     var id=(document.getElementById('bib-ed-id')||{value:''}).value;
-    var a=bibAssets.filter(function(x){return String(x.id)===String(id);})[0]; if(!a){ if(typeof closeMo==='function')closeMo('mo-bib-edit'); return; }
+    if(!id){ if(typeof closeMo==='function')closeMo('mo-bib-edit'); return; }
     var g=function(x){var el=document.getElementById(x);return el?el.value.trim():'';};
     var name=g('bib-ed-name'); if(!name){toast2('O nome é obrigatório.');return;}
     var link=g('bib-ed-link'); if(!link){toast2('O link é obrigatório.');return;}
-    a.name=name; a.link=link; a.oferta=g('bib-ed-oferta'); a.nicho=g('bib-ed-nicho')||a.nicho; a.tipo=g('bib-ed-tipo')||a.tipo; a.scale=g('bib-ed-scale')||'';
-    a.img=(document.getElementById('bib-ed-img-data')||{value:''}).value||'';
-    if(window.saveShared)window.saveShared('bib',bibAssets);
-    window.refreshFavCopy('bib',a.id);
+    var upd={
+      name:name, link:link, offer:g('bib-ed-oferta'),
+      niche:g('bib-ed-nicho')||undefined, type:g('bib-ed-tipo')||undefined,
+      scale:g('bib-ed-scale')||'',
+      image:(document.getElementById('bib-ed-img-data')||{value:''}).value||''
+    };
+    Object.keys(upd).forEach(function(k){ if(upd[k]===undefined) delete upd[k]; });
+    if(!window.sb){ toast2('Sem conexão com o servidor.'); return; }
+    try{
+      var r=await window.sb.from('bib_assets').update(upd).eq('id',id);
+      if(r.error){ toast2('Erro ao salvar: '+r.error.message); return; }
+    }catch(e){ toast2('Erro ao salvar.'); return; }
+    if(window.loadBibFromDB) await window.loadBibFromDB();
+    window.refreshFavCopy&&window.refreshFavCopy('bib',id);
     if(typeof closeMo==='function')closeMo('mo-bib-edit');
     try{ if(bibViewMode==='todos'&&typeof renderBibTodos==='function')renderBibTodos(); else if(typeof renderBibAtivos==='function')renderBibAtivos(); }catch(e){}
     if(typeof renderNichos==='function')renderNichos();
