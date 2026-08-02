@@ -2253,19 +2253,12 @@ async function doSignup(){
   if(!code){ err.textContent="Digite o código de convite."; err.style.display="block"; return; }
   btn.disabled=true; var t=btn.textContent; btn.textContent="Criando...";
   try{
-    var chk=await window.sb.rpc('check_invite',{c:code});
-    if(chk.error || !chk.data){ err.textContent="Código de convite inválido."; err.style.display="block"; return; }
-    var res=await window.sb.auth.signUp({email:em,password:pw,options:{data:{name:name,role:'affiliate'}}});
-    if(res.error){
-      var msg=res.error.message||'';
-      if(/registered|already|exists/i.test(msg)) err.textContent="Este email já está cadastrado. Faça login.";
-      else err.textContent="Não foi possível criar a conta: "+msg;
-      err.style.display="block"; return;
-    }
-    if(res.data && res.data.session){ await afterLogin(res.data.user); return; }
+    var resp=await fetch('/api/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,email:em,password:pw,code:code})});
+    var data={}; try{ data=await resp.json(); }catch(e){}
+    if(!resp.ok){ err.textContent=(data&&data.error)||"Não foi possível criar a conta."; err.style.display="block"; return; }
     var lr=await window.sb.auth.signInWithPassword({email:em,password:pw});
     if(lr.data && lr.data.session){ await afterLogin(lr.data.user); }
-    else { err.style.color='#22C55E'; err.textContent="Conta criada! Verifique seu email para confirmar e depois entre."; err.style.display="block"; setAuthMode('login'); }
+    else { err.style.color='#22C55E'; err.textContent="Conta criada! Agora clique em Entrar."; err.style.display="block"; setAuthMode('login'); }
   } catch(e){
     err.textContent="Erro ao criar conta. Tente novamente."; err.style.display="block";
   } finally {
