@@ -2874,6 +2874,26 @@ document.querySelectorAll(".mo").forEach(o=>o.addEventListener("click",function(
   function spySet(k,v)  { try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
   function spyKey(k)    { if(k==='assets')return "hwspy_shared_assets"; return "hwspy_"+(window.CU?window.CU.id:"anon")+"_"+k; }
 
+  async function spyLoadFromDB(){
+    if(!window.sb) return;
+    try{
+      var r = await window.sb.from('spy_assets').select('*').order('date',{ascending:false});
+      if(r.error){ console.error('spyLoadFromDB', r.error); return; }
+      spyAssets = (r.data||[]).map(function(x){
+        return {
+          id:x.id, img:x.image||'', tipo:x.tipo, nicho:x.nicho, plat:x.plat,
+          oferta:x.oferta||'', title:x.title, insight:x.insight||'',
+          tags:x.tags||[], ctr:x.ctr||'--', tempo:x.tempo||'--',
+          scale:x.scale||'', dias:x.dias||0, perf:x.perf||'--',
+          running:!!x.running, link:x.link||'#', date:x.date?Number(x.date):0
+        };
+      });
+      window.spyAssets = spyAssets;
+      spyUpdateHero();
+      spyRender();
+    }catch(e){ console.error(e); }
+  }
+
   function spySeedData() {
     var now=Date.now(), H=3600000;
     return [
@@ -3049,15 +3069,16 @@ document.querySelectorAll(".mo").forEach(o=>o.addEventListener("click",function(
     spyRender();
   }
 
-  function spyAddAsset() {
+  async function spyAddAsset() {
     var title  =(document.getElementById("up-title")||{value:""}).value.trim();
     if(!title){spyToast("O título é obrigatório.");return;}
     var linkVal=(document.getElementById("up-link")||{value:""}).value.trim();
     if(!linkVal){spyToast("O link é obrigatório.");return;}
     var imgData=(document.getElementById("up-img-data")||{value:""}).value||"";
+    var now=Date.now();
     var obj={
-      id:Date.now(),
-      img: imgData||"",
+      id: now,
+      image: imgData||"",
       tipo:(document.getElementById("up-tipo")||{value:"Criativo"}).value,
       nicho:(document.getElementById("up-nicho")||{value:"Weight Loss"}).value,
       plat:(document.getElementById("up-plat")||{value:"Meta Ads"}).value,
@@ -3068,17 +3089,21 @@ document.querySelectorAll(".mo").forEach(o=>o.addEventListener("click",function(
       ctr:"--",tempo:"--",scale:(document.getElementById("up-scale")||{value:""}).value||"",dias:0,perf:"--",
       running:false,
       link:linkVal,
-      date:Date.now()
+      date: now,
+      created_by:(window.CU?window.CU.id:null)
     };
-    spyAssets.unshift(obj);
-    spySet(spyKey("assets"),spyAssets);
+    if(!window.sb){ spyToast("Sem conexão com o servidor."); return; }
+    try{
+      var r=await window.sb.from('spy_assets').insert(obj);
+      if(r.error){ spyToast("Erro ao publicar: "+r.error.message); return; }
+    }catch(e){ spyToast("Erro ao publicar."); return; }
+    await spyLoadFromDB();
     ["up-title","up-oferta","up-link","up-img-data"].forEach(function(id){
       var el=document.getElementById(id);if(el)el.value="";
     });
     var us=document.getElementById("up-scale");if(us)us.value="";
     spyClearPasteZone("up-paste-zone","up-img-data");
     spyCloseMo("mo-upload");
-    spyUpdateHero();spyRender();
     spyToast("Ativo publicado no Spy!","ok");
   }
 
@@ -3126,38 +3151,40 @@ document.querySelectorAll(".mo").forEach(o=>o.addEventListener("click",function(
     spyOpenMo('mo-spy-edit');
   }
 
-  function spySaveEdit(){
+  async function spySaveEdit(){
     var id=parseInt((document.getElementById('spy-edit-id')||{value:''}).value);
-    var a=null;
-    for(var i=0;i<spyAssets.length;i++){if(spyAssets[i].id===id){a=spyAssets[i];break;}}
-    if(!a) return;
     var g=function(elId){var el=document.getElementById(elId);return el?el.value.trim():'';};
     var title=g('spy-edit-title'); if(!title){spyToast('O título é obrigatório.');return;}
     var link=g('spy-edit-link'); if(!link){spyToast('O link é obrigatório.');return;}
     var edImg=(document.getElementById('ed-img-data')||{value:''}).value;
-    a.title=title; a.link=link;
-    a.oferta=g('spy-edit-oferta');
-    a.tipo=g('spy-edit-tipo')||a.tipo;
-    a.nicho=g('spy-edit-nicho')||a.nicho;
-    a.plat=g('spy-edit-plat')||a.plat;
-    a.scale=g('spy-edit-scale')||'';
-    if(edImg) a.img=edImg;
-    spySet(spyKey('assets'), spyAssets);
+    var upd={
+      title:title, link:link, oferta:g('spy-edit-oferta'),
+      tipo:g('spy-edit-tipo')||undefined, nicho:g('spy-edit-nicho')||undefined,
+      plat:g('spy-edit-plat')||undefined, scale:g('spy-edit-scale')||''
+    };
+    if(edImg) upd.image=edImg;
+    Object.keys(upd).forEach(function(k){ if(upd[k]===undefined) delete upd[k]; });
+    if(!window.sb){ spyToast('Sem conexão com o servidor.'); return; }
+    try{
+      var r=await window.sb.from('spy_assets').update(upd).eq('id',id);
+      if(r.error){ spyToast('Erro ao salvar: '+r.error.message); return; }
+    }catch(e){ spyToast('Erro ao salvar.'); return; }
+    await spyLoadFromDB();
     if(window.refreshFavCopy)window.refreshFavCopy('spy',id);
     spyCloseMo('mo-spy-edit');
-    spyUpdateHero();
-    spyRender();
     if(typeof renderMeusAtivos==='function')renderMeusAtivos();
     spyToast('Ativo atualizado!','ok');
   }
 
-  function spyDelete(id){
-    spyAssets=spyAssets.filter(function(a){return a.id!==id;});
-    spySet(spyKey('assets'),spyAssets);
+  async function spyDelete(id){
+    if(!window.sb){ spyToast('Sem conexão com o servidor.'); return; }
+    try{
+      var r=await window.sb.from('spy_assets').delete().eq('id',id);
+      if(r.error){ spyToast('Erro ao remover: '+r.error.message); return; }
+    }catch(e){ spyToast('Erro ao remover.'); return; }
+    await spyLoadFromDB();
     if(window.removeFavByRef)window.removeFavByRef('spy',id);
     spyCloseMo('mo-detail');
-    spyUpdateHero();
-    spyRender();
     if(typeof renderMeusAtivos==='function')renderMeusAtivos();
     spyToast('Ativo removido.');
   }
@@ -3253,20 +3280,10 @@ document.querySelectorAll(".mo").forEach(o=>o.addEventListener("click",function(
 
   window.spyInit = function() {
     var cu = window.CU;
-    var verKey = "hwspy_ver";
-    var curVer = "2";
-    if(spyGet(verKey) !== curVer) {
-      // New version: wipe old seeded data
-      localStorage.removeItem("hwspy_"+(cu?cu.id:"anon")+"_assets");
-      localStorage.removeItem("hwspy_"+(cu?cu.id:"anon")+"_saved");
-      spySet(verKey, curVer);
-    }
-    var key = "hwspy_shared_assets";
-    spyAssets = spyGet(key);
-    if(!spyAssets){ spyAssets = spyGet("hwspy_admin_assets") || spyGet("hwspy_"+(cu?cu.id:"anon")+"_assets") || []; }
-    spySet(key, spyAssets);
+    spyAssets = [];                 // agora vem do banco (Supabase)
     window.spyAssets = spyAssets;
     spySaved = spyGet("hwspy_"+(cu?cu.id:"anon")+"_saved") || [];
+    spyLoadFromDB();                // carrega os ativos do Spy do banco
 
     if(cu && cu.role==="admin"){
       var btn=document.getElementById("btn-add-spy");
