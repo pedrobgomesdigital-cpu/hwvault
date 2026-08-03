@@ -4763,6 +4763,32 @@ window.updateChatFab=function(){var fab=document.getElementById('chat-fab');if(!
 window.openChatFAB=function(){var cn=document.getElementById('cofre-nav');try{if(typeof goPage==='function')goPage('cofre',cn);}catch(e){}try{var sn=document.getElementById('cofre-subnav');if(typeof toggleCofreNav==='function'&&sn&&!sn.classList.contains('open'))toggleCofreNav();}catch(e){}try{if(typeof goCofreView==='function')goCofreView('chat');}catch(e){}window.markChatRead();window.updateChatFab();};
 setInterval(function(){var c=cu();if(c){var cv=document.getElementById('cv-chat'),pc=document.getElementById('page-cofre');if(cv&&pc&&cv.classList.contains('active')&&pc.classList.contains('active'))window.markChatRead();}window.updateChatFab();},1500);
 window.updateChatFab();
+
+// Override: contador de novas mensagens do balão, via banco (Supabase)
+var _fabLastCheck=0;
+window.markChatRead=function(){
+  var c=window.CU;
+  if(c){ try{ localStorage.setItem('hwv5_'+c.id+'_chatlastread', Date.now()); }catch(e){} }
+  var b=document.getElementById('chat-fab-badge'); if(b) b.style.display='none';
+  var f=document.getElementById('chat-fab'); if(f) f.classList.remove('has-unread');
+  _fabLastCheck=0;
+};
+window.updateChatFab=function(){
+  var c=window.CU;
+  var fab=document.getElementById('chat-fab');
+  var badge=document.getElementById('chat-fab-badge');
+  if(!fab) return;
+  if(!c || c.role==='admin' || !window.sb){ fab.style.display='none'; return; }
+  fab.style.display='flex';
+  var t=Date.now(); if(t-_fabLastCheck<4000) return; _fabLastCheck=t;
+  window.sb.from('messages').select('ts,from_who').eq('thread_id',c.id).then(function(r){
+    if(r.error) return;
+    var lr=0; try{ lr=parseInt(localStorage.getItem('hwv5_'+c.id+'_chatlastread')||'0'); }catch(e){}
+    var unread=(r.data||[]).filter(function(m){ return m.from_who==='team' && Number(m.ts)>lr; }).length;
+    if(unread>0){ badge.textContent=unread>99?'99+':unread; badge.style.display='flex'; fab.classList.add('has-unread'); }
+    else { if(badge) badge.style.display='none'; fab.classList.remove('has-unread'); }
+  });
+};
 })();
 </script>
 <style>
