@@ -2306,7 +2306,7 @@ function initApp(){
     localStorage.setItem("hwv_ver","2");
   }
   bibAssets=[]; // Biblioteca agora vem do banco (Supabase) — ver loadBibFromDB()
-  meusCofre=load("cofre",null)||[]; save("cofre",meusCofre);
+  meusCofre=[]; // Meus Ativos agora vêm do banco (cofre_assets) — ver loadCofreFromDB()
   solicitacoes=[]; // Solicitações agora vêm do banco (Supabase) — ver loadSolsFromDB()
   chats=load("chats",null)||[]; save("chats",chats);
   notifs=load("notifs",null)||[]; save("notifs",notifs);
@@ -2323,6 +2323,7 @@ function initApp(){
   renderAll();
   loadBibFromDB();
   loadSolsFromDB();
+  loadCofreFromDB();
   if(window.spyInit) window.spyInit();
   if(CU.role==='admin') gestInit();
   pfInit();
@@ -2597,6 +2598,24 @@ function fmtCD(ms){if(ms<=0)return"Expirado";const s=Math.floor(ms/1000),d=Math.
 // ════════════════════════════════════════════════
 // COFRE: MEUS ATIVOS
 // ════════════════════════════════════════════════
+// ── Cofre do afiliado (ativos enviados pelo admin) no banco ──
+function mapCofreRow(x){
+  return { id:x.id, tipo:x.type, nicho:x.niche, oferta:x.offer, name:x.name, desc:'',
+    link:x.link||'#', img:x.image||'', isNew:!!x.isnew,
+    date:x.created_at?String(x.created_at).split('T')[0]:'' };
+}
+async function loadCofreFromDB(){
+  if(!window.sb || !window.CU) return;
+  try{
+    var r = await window.sb.from('cofre_assets').select('*').eq('user_id', window.CU.id).order('created_at',{ascending:false});
+    if(r.error){ console.error('loadCofreFromDB', r.error); return; }
+    meusCofre = (r.data||[]).map(mapCofreRow);
+    if(typeof renderMeusAtivos==='function') renderMeusAtivos();
+    if(typeof updateCounts==='function') updateCounts();
+  }catch(e){ console.error(e); }
+}
+window.loadCofreFromDB=loadCofreFromDB;
+
 function renderMeusAtivos(f){
   if(f!==undefined)maFilter=f;
   const g=document.getElementById("ma-grid"),e=document.getElementById("ma-empty");
@@ -3711,6 +3730,12 @@ async function gestLoadAffiliates(){
     var rq = await window.sb.from('requests').select('*').order('created_at',{ascending:false});
     if(!rq.error){ (rq.data||[]).forEach(function(x){ var k=x.user_id; (window.gestSolsMap[k]=window.gestSolsMap[k]||[]).push(mapReqRow(x)); }); }
   }catch(e){ console.error(e); }
+  // Carrega TODOS os ativos do cofre e agrupa por afiliado
+  window.gestCofreMap = {};
+  try{
+    var rc = await window.sb.from('cofre_assets').select('*').order('created_at',{ascending:false});
+    if(!rc.error){ (rc.data||[]).forEach(function(x){ var k=x.user_id; (window.gestCofreMap[k]=window.gestCofreMap[k]||[]).push(mapCofreRow(x)); }); }
+  }catch(e){ console.error(e); }
   window.AFFILIATES = AFFILIATES;
   if(typeof gestRenderList==='function') gestRenderList();
   var nb=document.getElementById('np-gest');
@@ -4127,8 +4152,9 @@ var _gRID={};
 // Global click helpers (avoid single-quote issues in inline onclick)
 window.gestClickItem   = function(el){ gestOpenAfiliado(el.getAttribute('data-affid')); };
 window.gestClickUpload = function(el){ gestOpenUpload(el.getAttribute('data-affid')); };
-window.gestClickDel    = function(el){ gestDelAtivo(el.getAttribute('data-affid'), parseInt(el.getAttribute('data-idx'))); };
-window.gestClickEdit   = function(el){ gestEditAtivo(el.getAttribute('data-affid'), parseInt(el.getAttribute('data-idx'))); };
+window.gestClickDel    = function(el){ gestDelAtivo(el.getAttribute('data-affid'), el.getAttribute('data-id')); };
+window.gestClickEdit   = function(el){ gestEditAtivo(el.getAttribute('data-affid'), el.getAttribute('data-id')); };
+window.gestClickDelSol = function(el){ gestDelSol(el.getAttribute('data-affid'), el.getAttribute('data-solid')); };
 window.gestClickStatus = function(el){ gestUpdateStatus(el.getAttribute('data-affid'), el.getAttribute('data-solid'), el.value); };
 window.gestClickSol    = function(el){ gestToggleSol(el.getAttribute('data-solid')); };
 
@@ -4149,7 +4175,7 @@ function gestRenderList() {
     var initials = a.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase();
     var sols = (window.gestSolsMap&&window.gestSolsMap[a.id])||[];
     var pending = sols.filter(function(s){return s.status==='recv';}).length;
-    var ativos = gestGetData(a.id,'cofre',[]).length;
+    var ativos = ((window.gestCofreMap&&window.gestCofreMap[a.id])||[]).length;
     var isActive = gestActiveId === a.id;
     return '<div class="gest-item'+(isActive?' active':'')+'" data-affid="'+a.id+'" onclick="gestClickItem(this)">' +
       '<div class="gest-av">'+initials+'</div>' +
@@ -4167,7 +4193,7 @@ function gestOpenAfiliado(affId) {
   gestRenderList();
   var aff = AFFILIATES.find(function(a){return a.id===affId;});
   if(!aff) return;
-  var ativos = gestGetData(affId,'cofre',[]);
+  var ativos = (window.gestCofreMap&&window.gestCofreMap[affId])||[];
   var sols   = (window.gestSolsMap&&window.gestSolsMap[affId])||[];
   var chats  = gestGetData(affId,'chats',[]);
   var initials = aff.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase();
@@ -4241,8 +4267,8 @@ function gestRenderAtivos(affId, ativos) {
         '</div>' +
         '<div class="gest-ac-foot">' +
           '<span class="gest-ac-date">'+fmtDate(a.date)+'</span>' +
-          '<button class="btn-gest-del" data-affid="'+affId+'" data-idx="'+i+'" onclick="gestClickEdit(this)" title="Editar" style="background:rgba(14,165,233,.12);border-color:rgba(14,165,233,.3);color:var(--gest2);margin-right:4px;font-size:13px;font-weight:600">✎</button>'+
-          '<button class="btn-gest-del" data-affid="'+affId+'" data-idx="'+i+'" onclick="gestClickDel(this)" title="Remover">&times;</button>' +
+          '<button class="btn-gest-del" data-affid="'+affId+'" data-id="'+a.id+'" onclick="gestClickEdit(this)" title="Editar" style="background:rgba(14,165,233,.12);border-color:rgba(14,165,233,.3);color:var(--gest2);margin-right:4px;font-size:13px;font-weight:600">✎</button>'+
+          '<button class="btn-gest-del" data-affid="'+affId+'" data-id="'+a.id+'" onclick="gestClickDel(this)" title="Remover">&times;</button>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -4251,49 +4277,63 @@ function gestRenderAtivos(affId, ativos) {
   return html;
 }
 
-var _gestDelPending = {affId:null, idx:null};
+var _gestDelPending = {affId:null, id:null};
 
-function gestDelAtivo(affId, idx) {
+// Recarrega os ativos do cofre de UM afiliado (após mudanças)
+async function gestReloadCofre(affId){
+  if(!window.sb) return;
+  try{
+    var r = await window.sb.from('cofre_assets').select('*').eq('user_id',affId).order('created_at',{ascending:false});
+    if(!r.error){ window.gestCofreMap=window.gestCofreMap||{}; window.gestCofreMap[affId]=(r.data||[]).map(mapCofreRow); }
+  }catch(e){ console.error(e); }
+}
+
+function gestDelAtivo(affId, id) {
   _gestDelPending.affId = affId;
-  _gestDelPending.idx   = idx;
+  _gestDelPending.id    = id;
   openMo('mo-gest-confirm');
 }
 
-function gestConfirmDel() {
+async function gestConfirmDel() {
   var affId = _gestDelPending.affId;
-  var idx   = _gestDelPending.idx;
-  if(affId === null || idx === null) return;
-  var ativos = gestGetData(affId,'cofre',[]);
-  ativos.splice(idx, 1);
-  gestSetData(affId,'cofre', ativos);
-  _gestDelPending = {affId:null, idx:null};
+  var id    = _gestDelPending.id;
+  if(affId === null || id === null) return;
+  if(!window.sb){ toast2('Sem conexão com o servidor.'); return; }
+  try{
+    var r = await window.sb.from('cofre_assets').delete().eq('id', id);
+    if(r.error){ toast2('Erro ao remover: '+r.error.message); return; }
+  }catch(e){ toast2('Erro ao remover.'); return; }
+  _gestDelPending = {affId:null, id:null};
+  await gestReloadCofre(affId);
   closeMo('mo-gest-confirm');
   gestOpenAfiliado(affId);
   toast2('Ativo removido do cofre do afiliado.','ok');
 }
 
-function gestEditAtivo(affId, idx) {
-  var ativos = gestGetData(affId,'cofre',[]);
-  var a = ativos[idx]; if(!a) return;
-  // Store pending edit info
-  document.getElementById('gedit-aff-id').value  = affId;
-  document.getElementById('gedit-idx').value      = idx;
-  document.getElementById('gedit-name').value     = a.name;
-  document.getElementById('gedit-link').value     = a.link||'';
+function gestEditAtivo(affId, id) {
+  var ativos = (window.gestCofreMap&&window.gestCofreMap[affId])||[];
+  var a = null; for(var i=0;i<ativos.length;i++){ if(String(ativos[i].id)===String(id)){ a=ativos[i]; break; } }
+  if(!a) return;
+  document.getElementById('gedit-aff-id').value = affId;
+  document.getElementById('gedit-idx').value    = id;
+  document.getElementById('gedit-name').value   = a.name;
+  document.getElementById('gedit-link').value   = (a.link&&a.link!=='#')?a.link:'';
   openMo('mo-gest-edit');
 }
 
-function gestSaveEdit() {
+async function gestSaveEdit() {
   var affId = document.getElementById('gedit-aff-id').value;
-  var idx   = parseInt(document.getElementById('gedit-idx').value);
+  var id    = document.getElementById('gedit-idx').value;
   var name  = document.getElementById('gedit-name').value.trim();
   var link  = document.getElementById('gedit-link').value.trim();
   if(!name){ toast2('O nome é obrigatório.'); return; }
-  var ativos = gestGetData(affId,'cofre',[]);
-  if(!ativos[idx]){ closeMo('mo-gest-edit'); return; }
-  ativos[idx].name = name;
-  if(link) ativos[idx].link = link;
-  gestSetData(affId,'cofre',ativos);
+  if(!window.sb){ toast2('Sem conexão com o servidor.'); return; }
+  var upd = { name:name }; if(link) upd.link = link;
+  try{
+    var r = await window.sb.from('cofre_assets').update(upd).eq('id', id);
+    if(r.error){ toast2('Erro ao salvar: '+r.error.message); return; }
+  }catch(e){ toast2('Erro ao salvar.'); return; }
+  await gestReloadCofre(affId);
   closeMo('mo-gest-edit');
   gestOpenAfiliado(affId);
   toast2('Ativo atualizado!','ok');
@@ -4307,7 +4347,7 @@ function gestOpenUpload(affId) {
   openMo('mo-gest-upload');
 }
 
-function gestSubmitUpload() {
+async function gestSubmitUpload() {
   var affId = document.getElementById('gup-aff-id').value;
   var name  = (document.getElementById('gup-name')||{value:''}).value.trim();
   var tipo  = (document.getElementById('gup-tipo')||{value:'Ad'}).value;
@@ -4315,22 +4355,22 @@ function gestSubmitUpload() {
   var oferta= (document.getElementById('gup-oferta')||{value:''}).value.trim();
   var link  = (document.getElementById('gup-link')||{value:''}).value.trim();
   if(!name||!link){ toast2('Preencha nome e link.'); return; }
-  var ativos = gestGetData(affId,'cofre',[]);
-  ativos.unshift({
+  if(!window.sb){ toast2('Sem conexão com o servidor.'); return; }
+  var row = {
     id: Date.now(),
-    tipo: tipo,
-    nicho: nicho,
-    oferta: oferta||'—',
-    name: name,
-    desc: '',
-    link: link,
-    date: new Date().toISOString().split('T')[0],
-    isNew: true
-  });
-  gestSetData(affId,'cofre',ativos);
+    user_id: affId,
+    name: name, type: tipo, niche: nicho, offer: oferta||'—',
+    link: link, image: '', isnew: true,
+    created_by: (window.CU?window.CU.id:null)
+  };
+  try{
+    var r = await window.sb.from('cofre_assets').insert(row);
+    if(r.error){ toast2('Erro ao enviar: '+r.error.message); return; }
+  }catch(e){ toast2('Erro ao enviar. Tente novamente.'); return; }
+  await gestReloadCofre(affId);
   closeMo('mo-gest-upload');
   gestOpenAfiliado(affId);
-  gestInit();
+  gestRenderList();
   toast2('Ativo enviado para '+((AFFILIATES.find(function(a){return a.id===affId;})||{name:affId}).name)+'!','ok');
 }
 
@@ -4358,6 +4398,7 @@ function gestRenderSols(affId, sols) {
             '<option value="pronto"'+(s.status==='pronto'?' selected':'')+'>Pronto</option>' +
             '<option value="entregue"'+(s.status==='entregue'?' selected':'')+'>Entregue</option>' +
           '</select>' +
+          '<button class="btn-gest-del" data-affid="'+affId+'" data-solid="'+s.id+'" onclick="event.stopPropagation();gestClickDelSol(this)" title="Excluir solicitação">&times;</button>' +
         '</div>' +
       '</div>' +
       '<div class="gest-sol-expand" id="gse-'+affId+'-'+i+'">' +
@@ -4391,6 +4432,21 @@ async function gestUpdateStatus(affId, solId, newStatus) {
   }
   gestOpenAfiliado(affId);
   if(typeof toast2==='function') toast2('Status atualizado!','ok');
+}
+
+async function gestDelSol(affId, solId){
+  if(!window.sb){ toast2('Sem conexão com o servidor.'); return; }
+  if(!confirm('Excluir esta solicitação? Essa ação não pode ser desfeita.')) return;
+  try{
+    var r = await window.sb.from('requests').delete().eq('id', solId);
+    if(r.error){ toast2('Erro ao excluir: '+r.error.message); return; }
+  }catch(e){ toast2('Erro ao excluir.'); return; }
+  if(window.gestSolsMap && window.gestSolsMap[affId]){
+    window.gestSolsMap[affId] = window.gestSolsMap[affId].filter(function(s){ return String(s.id)!==String(solId); });
+  }
+  gestOpenAfiliado(affId);
+  gestRenderList();
+  toast2('Solicitação excluída.','ok');
 }
 
 // ── CHAT ──
