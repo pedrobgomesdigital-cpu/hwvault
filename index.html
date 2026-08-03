@@ -3763,8 +3763,8 @@ var tgUnreadCount = 0;
 var TG_EMOJIS = ['😊','😂','🔥','💪','👍','❤️','🎉','✅','🚀','👏','😮','🤔','💡','📌','⭐','💰','📈','🎯','👀','✨','😎','🙏','💯','🤝','📣','⚡','🎨','📝','🔑','🏆'];
 
 function tgKey(){ return 'hwv5_' + (CU ? CU.id : 'x') + '_singlechat'; }
-function tgLoad(){ try{ var v=localStorage.getItem(tgKey()); return v?JSON.parse(v):[]; }catch(e){ return []; } }
-function tgSave(){ try{ localStorage.setItem(tgKey(), JSON.stringify(tgMsgs)); }catch(e){} }
+function tgLoad(){ return []; }
+function tgSave(){} // desativado: o chat agora vive no banco (Supabase)
 
 
 // ════ TEMA ════
@@ -3796,10 +3796,32 @@ function tgEsc(t){
 }
 
 function tgChatInit(){
-  tgMsgs = tgLoad();
-  tgRender();
+  tgLoadFromDB();
   tgWire();
   tgInitEmojis();
+  tgStartPolling();
+}
+async function tgLoadFromDB(){
+  if(!window.sb || !window.CU) return;
+  try{
+    var r = await window.sb.from('messages').select('*').eq('thread_id', window.CU.id).order('ts',{ascending:true});
+    if(r.error){ console.error('tgLoadFromDB', r.error); return; }
+    tgMsgs = (r.data||[]).map(function(x){ return { id:x.id, from:x.from_who, text:x.text, ts:x.ts?Number(x.ts):0, edited:!!x.edited, replyTo:x.reply_to||undefined, reactions:{} }; });
+    tgRender();
+  }catch(e){ console.error(e); }
+}
+window.tgLoadFromDB=tgLoadFromDB;
+var _tgPoll=null;
+function tgStartPolling(){
+  if(_tgPoll) clearInterval(_tgPoll);
+  _tgPoll=setInterval(function(){
+    var cv=document.getElementById('cv-chat');
+    if(cv && cv.classList.contains('active') && window.sb && window.CU){
+      window.sb.from('messages').select('id').eq('thread_id',window.CU.id).then(function(r){
+        if(!r.error && (r.data||[]).length!==tgMsgs.length){ tgLoadFromDB().then(tgScrollBottom); }
+      });
+    }
+  }, 4000);
 }
 
 function tgWire(){
@@ -3851,29 +3873,24 @@ function tgScrollToMsg(msgId){
   if(el){ el.scrollIntoView({behavior:'smooth',block:'center'}); el.style.background='rgba(240,165,0,.12)'; setTimeout(function(){el.style.background='';},1200); }
 }
 
-function tgSend(){
+async function tgSend(){
   var inp=document.getElementById('tg-inp');
   if(!inp) return;
   var txt=inp.value.trim(); if(!txt) return;
+  if(!window.sb||!window.CU){ toast2('Sem conexão com o servidor.'); return; }
   if(tgEditId!==null){
-    var m=tgMsgs.find(function(x){return x.id===tgEditId;});
-    if(m){m.text=txt;m.edited=true;}
-    tgSave();tgEditId=null;
-    document.getElementById('tg-edit-bar').classList.remove('show');
+    var eid=tgEditId; tgEditId=null;
+    var eb=document.getElementById('tg-edit-bar'); if(eb) eb.classList.remove('show');
     inp.value='';inp.style.height='auto';
-    tgRender();return;
+    try{ await window.sb.from('messages').update({text:txt,edited:true}).eq('id',eid); }catch(e){}
+    await tgLoadFromDB(); return;
   }
-  var msg={id:Date.now(),from:'me',text:txt,ts:Date.now(),edited:false,read:false,reactions:{}};
-  if(tgReplyId!==null){msg.replyTo=tgReplyId;tgReplyId=null;document.getElementById('tg-reply-bar').classList.remove('show');}
-  tgMsgs.push(msg);tgSave();
+  var rid=(tgReplyId!==null)?tgReplyId:null;
+  if(tgReplyId!==null){ tgReplyId=null; var rb=document.getElementById('tg-reply-bar'); if(rb) rb.classList.remove('show'); }
   inp.value='';inp.style.height='auto';
-  tgRender();
-  // Mark read after delay
-  clearTimeout(tgTypingTmr);
-  tgTypingTmr=setTimeout(function(){
-    var last=tgMsgs.filter(function(x){return x.from==='me';}).pop();
-    if(last){last.read=true;tgSave();tgRender();}
-  },800);
+  var row={ id:Date.now(), thread_id:window.CU.id, sender_id:window.CU.id, from_who:'me', text:txt, ts:Date.now(), edited:false, reply_to:rid };
+  try{ var r=await window.sb.from('messages').insert(row); if(r.error){ toast2('Erro ao enviar: '+r.error.message); return; } }catch(e){ toast2('Erro ao enviar.'); return; }
+  await tgLoadFromDB(); tgScrollBottom();
 }
 
 function tgShowTyping(show){
@@ -3928,10 +3945,10 @@ function tgCancelEdit(){
   if(inp){inp.value='';inp.style.height='auto';}
 }
 
-function tgDeleteMsg(msgId){
+async function tgDeleteMsg(msgId){
   msgId=parseInt(msgId)||msgId;
-  tgMsgs=tgMsgs.filter(function(x){return x.id!==msgId;});
-  tgSave();tgRender();toast2('Mensagem apagada.');
+  try{ if(window.sb) await window.sb.from('messages').delete().eq('id',msgId); }catch(e){}
+  await tgLoadFromDB(); toast2('Mensagem apagada.');
 }
 
 function tgShowReactPicker(){
@@ -4158,8 +4175,24 @@ window.gestClickDelSol = function(el){ gestDelSol(el.getAttribute('data-affid'),
 window.gestClickStatus = function(el){ gestUpdateStatus(el.getAttribute('data-affid'), el.getAttribute('data-solid'), el.value); };
 window.gestClickSol    = function(el){ gestToggleSol(el.getAttribute('data-solid')); };
 
+var _gestPoll=null;
+function gestStartPolling(){
+  if(_gestPoll) clearInterval(_gestPoll);
+  _gestPoll=setInterval(function(){
+    if(!gestActiveId || !window.sb) return;
+    var chatView=document.getElementById('gv-chat');
+    if(!chatView || !chatView.classList.contains('active')) return;
+    var affId=gestActiveId;
+    window.sb.from('messages').select('id').eq('thread_id',affId).then(function(r){
+      if(r.error) return;
+      var cached=((window._gestMsgCache&&window._gestMsgCache[affId])||[]).length;
+      if((r.data||[]).length!==cached){ gestTgRenderMsgs(affId); }
+    });
+  },4000);
+}
 function gestInit() {
   gestLoadAffiliates();  // carrega afiliados reais do banco e renderiza
+  gestStartPolling();
   // If chat tab is active, re-render msgs
   var chatTabActive = document.querySelector('.gest-tab.active[data-view="chat"]');
   if(chatTabActive && gestActiveId) setTimeout(function(){ gestTgRenderMsgs(gestActiveId); }, 60);
@@ -4498,9 +4531,11 @@ function _gKey(a){ return 'hwv5_'+a+'_singlechat'; }
 function _gLoad(a){ try{ var v=localStorage.getItem(_gKey(a)); return v?JSON.parse(v):[]; }catch(e){ return []; } }
 function _gSave(a,m){ try{ localStorage.setItem(_gKey(a), JSON.stringify(m)); }catch(e){} }
 
-function gestTgRenderMsgs(affId){
+async function gestTgRenderMsgs(affId){
   var el=document.getElementById('gest-msgs-'+affId);if(!el)return;
-  var msgs=_gLoad(affId);
+  var msgs=[];
+  try{ var _r=await window.sb.from('messages').select('*').eq('thread_id',affId).order('ts',{ascending:true}); if(!_r.error) msgs=(_r.data||[]).map(function(x){return {id:x.id,from:x.from_who,text:x.text,ts:x.ts?Number(x.ts):0,edited:!!x.edited,replyTo:x.reply_to||undefined};}); }catch(e){}
+  window._gestMsgCache=window._gestMsgCache||{}; window._gestMsgCache[affId]=msgs;
   var aff=AFFILIATES.find(function(a){return a.id===affId;});
   var ai=aff?aff.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase():'?';
   var b64=window._hwLogoB64||'';
@@ -4581,28 +4616,24 @@ function gestTgKD(e, el){
 
 function gestTgKeydown(e,a){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();gestTgSend(a);}}
 
-function gestTgSend(affId){
+async function gestTgSend(affId){
   var inp=document.getElementById('gest-inp-'+affId); if(!inp) return;
   var txt=inp.value.trim(); if(!txt) return;
-  // Check if editing
+  if(!window.sb){ toast2('Sem conexão com o servidor.'); return; }
   if(inp.dataset.editing){
     var editMsgId=parseInt(inp.dataset.editing);
-    var msgs2=_gLoad(affId);
-    var em=msgs2.find(function(x){return x.id===editMsgId;});
-    if(em){em.text=txt;em.edited=true;_gSave(affId,msgs2);}
     inp.value='';inp.style.height='auto';
     delete inp.dataset.editing;delete inp.dataset.editAffid;
     var btn2=inp.closest('.tg-inp-area').querySelector('.tg-send-btn');
     if(btn2) btn2.style.background='var(--gest2)';
+    try{ await window.sb.from('messages').update({text:txt,edited:true}).eq('id',editMsgId); }catch(e){}
     gestTgRenderMsgs(affId);return;
   }
-  var msgs=_gLoad(affId),msg={id:Date.now(),from:'team',text:txt,ts:Date.now(),edited:false};
-  if(_gRID[affId]){msg.replyTo=_gRID[affId];gestTgCancelReply(affId);}
-  msgs.push(msg); _gSave(affId,msgs);
+  var rid=_gRID[affId]||null; if(_gRID[affId]) gestTgCancelReply(affId);
   inp.value=''; inp.style.height='auto';
+  var row={ id:Date.now(), thread_id:affId, sender_id:(window.CU?window.CU.id:null), from_who:'team', text:txt, ts:Date.now(), edited:false, reply_to:rid };
+  try{ var r=await window.sb.from('messages').insert(row); if(r.error){ toast2('Erro ao enviar: '+r.error.message); return; } }catch(e){ toast2('Erro ao enviar.'); return; }
   gestTgRenderMsgs(affId); toast2('Enviado!','ok');
-  // Notify afiliado of new message
-  try{ var _nk='hwv5_'+affId+'_notifs'; var _nv=localStorage.getItem(_nk); var _nl=_nv?JSON.parse(_nv):[]; _nl.unshift({id:Date.now(),ic:'💬',t:'Nova mensagem do time H&W',s:txt.slice(0,60),time:Date.now(),read:false}); localStorage.setItem(_nk,JSON.stringify(_nl)); }catch(e){}
 }
 
 function gestTgReply(affId,msgId){
@@ -4620,7 +4651,7 @@ function gestTgCancelReply(affId){
 }
 
 function gestTgEdit(affId,msgId){
-  var msgs=_gLoad(affId),m=msgs.find(function(x){return x.id===msgId;}); if(!m) return;
+  var msgs=(window._gestMsgCache&&window._gestMsgCache[affId])||[]; var m=msgs.find(function(x){return x.id===msgId;}); if(!m) return;
   // Store for inline edit
   _gestEditAffId = affId;
   _gestEditMsgId = msgId;
@@ -4641,9 +4672,9 @@ function gestTgEdit(affId,msgId){
 }
 var _gestEditAffId=null, _gestEditMsgId=null;
 
-function gestTgDelete(affId,msgId){
+async function gestTgDelete(affId,msgId){
   if(!confirm('Apagar esta mensagem?')) return;
-  _gSave(affId,_gLoad(affId).filter(function(x){return x.id!==msgId;}));
+  try{ if(window.sb) await window.sb.from('messages').delete().eq('id',msgId); }catch(e){}
   gestTgRenderMsgs(affId); toast2('Mensagem apagada.');
 }
 
