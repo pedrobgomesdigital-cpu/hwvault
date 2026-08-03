@@ -2683,7 +2683,7 @@ function mapReqRow(x){
 async function loadSolsFromDB(){
   if(!window.sb || !window.CU) return;
   try{
-    var r = await window.sb.from('requests').select('*').order('created_at',{ascending:false});
+    var r = await window.sb.from('requests').select('*').eq('user_id', window.CU.id).order('created_at',{ascending:false});
     if(r.error){ console.error('loadSolsFromDB', r.error); if(typeof toast2==='function') toast2('Erro ao carregar solicitações: '+r.error.message); return; }
     solicitacoes = (r.data||[]).map(mapReqRow);
     if(typeof renderSols==='function') renderSols();
@@ -2710,6 +2710,24 @@ function renderSols(f){
 function filterSols(f,btn){
   document.querySelectorAll(".sol-tabs .sol-tab").forEach(b=>b.classList.remove("active"));
   btn.classList.add("active");renderSols(f);
+}
+// Definições de status das solicitações (faltavam no código original)
+var STATUS_PROG = { recv:5, prod:45, edicao:70, pronto:90, entregue:100 };
+var STATUS_META = {
+  recv:{lbl:'Recebida',color:'#F0A500'},
+  prod:{lbl:'Em Produção',color:'#3B82F6'},
+  edicao:{lbl:'Em Edição',color:'#8B5CF6'},
+  pronto:{lbl:'Pronto',color:'#22C55E'},
+  entregue:{lbl:'Entregue',color:'#22C55E'}
+};
+function getStatusStep(st){ return STATUS_META[st] || STATUS_META.recv; }
+function renderSolPipeline(st){
+  var order=['recv','prod','edicao','pronto','entregue'];
+  var idx=order.indexOf(st); if(idx<0) idx=0;
+  return '<div style="display:flex;gap:6px;margin-bottom:12px">'+order.map(function(k,i){
+    var done=i<=idx, m=STATUS_META[k];
+    return '<div style="flex:1;text-align:center"><div style="height:4px;border-radius:2px;background:'+(done?m.color:'rgba(255,255,255,.12)')+'"></div><div style="font-size:8px;margin-top:4px;color:'+(done?m.color:'var(--t3)')+'">'+m.lbl+'</div></div>';
+  }).join('')+'</div>';
 }
 function buildSolCard(s){
   var ic=TIPO_IC[s.tipo]||"📄";
