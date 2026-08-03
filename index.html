@@ -2815,7 +2815,7 @@ async function submitSol(){
   var maxN=0; solicitacoes.forEach(function(x){ var m=/(\d+)\s*$/.exec(x.code||x.nome||''); if(m){var v=parseInt(m[1],10); if(v>maxN)maxN=v;} });
   var num=String(maxN+1).padStart(3,'0');
   var code=solSlugAff(window.CU.name)+'-'+(SOL_TIPO_SIGLA[tipo]||'AT')+'-'+(SOL_NICHO_SIGLA[nicho]||'GN')+'-'+num;
-  var row={ id:Date.now(), user_id:window.CU.id, user_name:window.CU.name||'', code:code,
+  var row={ id:Date.now()*1000+Math.floor(Math.random()*1000), user_id:window.CU.id, user_name:window.CU.name||'', code:code,
     offer:oferta, type:tipo, niche:nicho, description:desc+(refs?("\n\nReferências: "+refs):""), priority:prio, status:'recv', prog:0 };
   var btn=document.querySelector('.btn-submit'); if(btn){btn.disabled=true;}
   try{
@@ -4231,8 +4231,16 @@ function gestRenderList() {
   }).join('');
 }
 
-function gestOpenAfiliado(affId) {
+async function gestOpenAfiliado(affId) {
   gestActiveId = affId;
+  // Recarrega SEMPRE as solicitações e o cofre deste afiliado do banco (dados atuais)
+  try{
+    if(window.sb){
+      var _rs=await window.sb.from('requests').select('*').eq('user_id',affId).order('created_at',{ascending:false});
+      if(!_rs.error){ window.gestSolsMap=window.gestSolsMap||{}; window.gestSolsMap[affId]=(_rs.data||[]).map(mapReqRow); }
+    }
+  }catch(e){ console.error(e); }
+  try{ if(typeof gestReloadCofre==='function') await gestReloadCofre(affId); }catch(e){}
   gestRenderList();
   var aff = AFFILIATES.find(function(a){return a.id===affId;});
   if(!aff) return;
