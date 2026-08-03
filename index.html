@@ -1418,7 +1418,6 @@ body.is-admin .admin-only { display: flex !important; }
                     </select>
                   </div>
                 </div>
-                <div class="fr"><label class="fla">Título da solicitação</label><input type="text" class="fin" id="rs-nome" placeholder="Ex: Ad com ângulo de tontura para CardioFlush"></div>
                 <div class="fr"><label class="fla">Descrição detalhada</label><textarea class="fta" id="rs-desc" placeholder="Explique o que você precisa: ângulo, formato, onde vai usar, referências de copy que gosta..."></textarea></div>
                 <div class="f2">
                   <div><label class="fla">Nicho</label>
@@ -2305,7 +2304,7 @@ function initApp(){
   }
   bibAssets=[]; // Biblioteca agora vem do banco (Supabase) — ver loadBibFromDB()
   meusCofre=load("cofre",null)||[]; save("cofre",meusCofre);
-  solicitacoes=load("sols",null)||[]; save("sols",solicitacoes);
+  solicitacoes=[]; // Solicitações agora vêm do banco (Supabase) — ver loadSolsFromDB()
   chats=load("chats",null)||[]; save("chats",chats);
   notifs=load("notifs",null)||[]; save("notifs",notifs);
   favs=load("favs",[]); save("favs",favs);
@@ -2320,6 +2319,7 @@ function initApp(){
   }
   renderAll();
   loadBibFromDB();
+  loadSolsFromDB();
   if(window.spyInit) window.spyInit();
   if(CU.role==='admin') gestInit();
   pfInit();
@@ -2665,6 +2665,33 @@ function toggleFav(id){
 // ════════════════════════════════════════════════
 // COFRE: SOLICITAÇÕES
 // ════════════════════════════════════════════════
+// ── Solicitações no banco (Supabase) ──
+var SOL_TIPO_SIGLA = { 'Ad':'AD', 'Microlead':'ML', 'Presell':'PS', 'VSL':'PV' };
+var SOL_NICHO_SIGLA = { 'Weight Loss':'WL','Diabetes':'DB','Memory':'MEM','High Blood Pressure':'HBP','Skin':'SK','ED':'ED','Joint Pain':'JP' };
+function solSlugAff(name){
+  var base=((name||'AFF').trim().split(/\s+/)[0])||'AFF';
+  try{ base=base.normalize('NFD').replace(/[̀-ͯ]/g,''); }catch(e){}
+  base=base.toUpperCase().replace(/[^A-Z0-9]/g,'');
+  return base||'AFF';
+}
+function mapReqRow(x){
+  return { id:x.id, tipo:x.type, oferta:x.offer, nome:x.code, code:x.code,
+    desc:x.description||'', nicho:x.niche, prio:x.priority||'normal',
+    status:x.status||'recv', prog:x.prog||0,
+    date: x.created_at?String(x.created_at).split('T')[0]:'', hist:[], deliveries:[] };
+}
+async function loadSolsFromDB(){
+  if(!window.sb || !window.CU) return;
+  try{
+    var r = await window.sb.from('requests').select('*').eq('user_id', window.CU.id).order('created_at',{ascending:false});
+    if(r.error){ console.error('loadSolsFromDB', r.error); return; }
+    solicitacoes = (r.data||[]).map(mapReqRow);
+    if(typeof renderSols==='function') renderSols();
+    if(typeof updateCounts==='function') updateCounts();
+  }catch(e){ console.error(e); }
+}
+window.loadSolsFromDB=loadSolsFromDB;
+
 function renderSols(f){
   if(f!==undefined)solFilter=f;
   const list=solFilter==="all"?solicitacoes:solicitacoes.filter(s=>s.status===solFilter);
@@ -2735,32 +2762,30 @@ function setPrio(p,btn){
   document.querySelectorAll(".prio-btn").forEach(b=>b.classList.remove("active"));
   btn.classList.add("active");
 }
-function submitSol(){
+async function submitSol(){
   const oferta=document.getElementById("rs-oferta").value.trim();
   const tipo=document.getElementById("rs-tipo").value;
-  const nome=document.getElementById("rs-nome").value.trim();
   const desc=document.getElementById("rs-desc").value.trim();
   const nicho=document.getElementById("rs-nicho").value;
   const refs=document.getElementById("rs-refs").value.trim();
-  if(!oferta||!nome||!desc){toast2("Preencha oferta, título e descrição.");return;}
-  const s={id:Date.now(),tipo,oferta,nome,desc,nicho,prio,refs,status:"recv",prog:0,date:new Date().toISOString().split("T")[0],
-    hist:[{title:"Solicitação recebida",time:new Date().toLocaleString("pt-BR"),note:"A equipe recebeu sua solicitação.",done:true}],
-    deliveries:[]};
-  solicitacoes.unshift(s);save("sols",solicitacoes);
-  ["rs-oferta","rs-nome","rs-desc","rs-refs"].forEach(id=>document.getElementById(id).value="");
-  prio="normal";document.querySelectorAll(".prio-btn").forEach(b=>{b.classList.remove("active");if(b.classList.contains("p-normal"))b.classList.add("active");});
-  // auto-open chat
-  const c={id:Date.now()+1,assunto:"Solicitação: "+nome,unread:0,updatedAt:Date.now(),msgs:[
-    {from:"me",text:`Estou solicitando:\n\nTipo: ${tipo}\nOferta: ${oferta}\nNicho: ${nicho}\nPrioridade: ${prio}\n\n${desc}${refs?"\n\nReferências: "+refs:""}`,time:Date.now()},
-  ]};
-  chats.unshift(c);save("chats",chats);
-  renderAll();toast2("Solicitação enviada!","ok");
-  addNotif("📋","Solicitação enviada","Sua solicitação de "+tipo+" para "+oferta+" foi recebida pelo time.");
-  setTimeout(()=>{
-    c.msgs.push({from:"team",text:"Recebemos! Sua solicitação já está na fila do time criativo. Vamos te atualizar aqui conforme avançarmos. 🚀",time:Date.now()});
-    c.updatedAt=Date.now();c.unread=1;save("chats",chats);renderChatList();updateCounts();
-    addNotif("💬","Confirmação recebida","O time confirmou o recebimento da sua solicitação.");
-  },2500);
+  if(!oferta||!desc){toast2("Preencha a oferta e a descrição.");return;}
+  if(!window.sb||!window.CU){toast2("Sem conexão com o servidor.");return;}
+  // Código automático: AFILIADO-TIPO-NICHO-NNN (numeração individual por afiliado)
+  var maxN=0; solicitacoes.forEach(function(x){ var m=/(\d+)\s*$/.exec(x.code||x.nome||''); if(m){var v=parseInt(m[1],10); if(v>maxN)maxN=v;} });
+  var num=String(maxN+1).padStart(3,'0');
+  var code=solSlugAff(window.CU.name)+'-'+(SOL_TIPO_SIGLA[tipo]||'AT')+'-'+(SOL_NICHO_SIGLA[nicho]||'GN')+'-'+num;
+  var row={ id:Date.now(), user_id:window.CU.id, user_name:window.CU.name||'', code:code,
+    offer:oferta, type:tipo, niche:nicho, description:desc+(refs?("\n\nReferências: "+refs):""), priority:prio, status:'recv', prog:0 };
+  var btn=document.querySelector('.btn-submit'); if(btn){btn.disabled=true;}
+  try{
+    var r=await window.sb.from('requests').insert(row);
+    if(r.error){ toast2('Erro ao enviar: '+r.error.message); if(btn)btn.disabled=false; return; }
+  }catch(e){ toast2('Erro ao enviar. Tente novamente.'); if(btn)btn.disabled=false; return; }
+  if(btn)btn.disabled=false;
+  ["rs-oferta","rs-desc","rs-refs"].forEach(function(id){var el=document.getElementById(id);if(el)el.value="";});
+  prio="normal";document.querySelectorAll(".prio-btn").forEach(function(b){b.classList.remove("active");if(b.classList.contains("p-normal"))b.classList.add("active");});
+  await loadSolsFromDB();
+  toast2("Solicitação "+code+" enviada!","ok");
   goCofreView("sols");
 }
 
@@ -3640,10 +3665,16 @@ async function gestLoadAffiliates(){
       AFFILIATES.sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
     }
   }catch(e){ console.error(e); }
+  // Carrega TODAS as solicitações do banco e agrupa por afiliado
+  window.gestSolsMap = {};
+  try{
+    var rq = await window.sb.from('requests').select('*').order('created_at',{ascending:false});
+    if(!rq.error){ (rq.data||[]).forEach(function(x){ var k=x.user_id; (window.gestSolsMap[k]=window.gestSolsMap[k]||[]).push(mapReqRow(x)); }); }
+  }catch(e){ console.error(e); }
   window.AFFILIATES = AFFILIATES;
   if(typeof gestRenderList==='function') gestRenderList();
   var nb=document.getElementById('np-gest');
-  if(nb){ var total=AFFILIATES.reduce(function(acc,a){var sols=gestGetData(a.id,'sols',[]);return acc+sols.filter(function(s){return s.status==='recv';}).length;},0); nb.textContent=total||'0'; }
+  if(nb){ var total=AFFILIATES.reduce(function(acc,a){var sols=(window.gestSolsMap[a.id]||[]);return acc+sols.filter(function(s){return s.status==='recv';}).length;},0); nb.textContent=total||'0'; }
 }
 
 function gestGetData(affId, key, def) {
@@ -4058,7 +4089,7 @@ window.gestClickItem   = function(el){ gestOpenAfiliado(el.getAttribute('data-af
 window.gestClickUpload = function(el){ gestOpenUpload(el.getAttribute('data-affid')); };
 window.gestClickDel    = function(el){ gestDelAtivo(el.getAttribute('data-affid'), parseInt(el.getAttribute('data-idx'))); };
 window.gestClickEdit   = function(el){ gestEditAtivo(el.getAttribute('data-affid'), parseInt(el.getAttribute('data-idx'))); };
-window.gestClickStatus = function(el){ gestUpdateStatus(el.getAttribute('data-affid'), parseInt(el.getAttribute('data-idx')), el.value); };
+window.gestClickStatus = function(el){ gestUpdateStatus(el.getAttribute('data-affid'), el.getAttribute('data-solid'), el.value); };
 window.gestClickSol    = function(el){ gestToggleSol(el.getAttribute('data-solid')); };
 
 function gestInit() {
@@ -4076,7 +4107,7 @@ function gestRenderList() {
   if(!list.length) { el.innerHTML='<div style="padding:20px;text-align:center;font-size:11px;color:var(--t3)">Nenhum afiliado encontrado</div>'; return; }
   el.innerHTML = list.map(function(a){
     var initials = a.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase();
-    var sols = gestGetData(a.id,'sols',[]);
+    var sols = (window.gestSolsMap&&window.gestSolsMap[a.id])||[];
     var pending = sols.filter(function(s){return s.status==='recv';}).length;
     var ativos = gestGetData(a.id,'cofre',[]).length;
     var isActive = gestActiveId === a.id;
@@ -4097,7 +4128,7 @@ function gestOpenAfiliado(affId) {
   var aff = AFFILIATES.find(function(a){return a.id===affId;});
   if(!aff) return;
   var ativos = gestGetData(affId,'cofre',[]);
-  var sols   = gestGetData(affId,'sols',[]);
+  var sols   = (window.gestSolsMap&&window.gestSolsMap[affId])||[];
   var chats  = gestGetData(affId,'chats',[]);
   var initials = aff.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase();
   var pendingSols = sols.filter(function(s){return s.status==='recv';}).length;
@@ -4266,7 +4297,7 @@ function gestSubmitUpload() {
 // ── SOLICITAÇÕES ──
 function gestRenderSols(affId, sols) {
   if(!sols.length) return '<div class="empty" style="padding:32px 0"><div class="empty-t">Nenhuma solicitação</div></div>';
-  var stM = {recv:{cls:'sp-recv',lbl:'Recebida'},prod:{cls:'sp-prod',lbl:'Em Produção'},final:{cls:'sp-final',lbl:'Finalizada'},entregue:{cls:'sp-entregue',lbl:'Entregue'}};
+  var stM = {recv:{cls:'sp-recv',lbl:'Recebida'},prod:{cls:'sp-prod',lbl:'Em Produção'},edicao:{cls:'sp-prod',lbl:'Em Edição'},pronto:{cls:'sp-final',lbl:'Pronto'},final:{cls:'sp-final',lbl:'Finalizada'},entregue:{cls:'sp-entregue',lbl:'Entregue'}};
   return sols.map(function(s,i){
     var st = stM[s.status]||{cls:'sp-recv',lbl:'Recebida'};
     return '<div class="gest-sol-card">' +
@@ -4280,7 +4311,7 @@ function gestRenderSols(affId, sols) {
           '</div>' +
         '</div>' +
         '<div style="display:flex;align-items:center;gap:8px">' +
-          '<select class="sol-status-select" onclick="event.stopPropagation()" data-affid="'+affId+'" data-idx="'+i+'" onchange="gestClickStatus(this)">' +
+          '<select class="sol-status-select" onclick="event.stopPropagation()" data-affid="'+affId+'" data-solid="'+s.id+'" onchange="gestClickStatus(this)">' +
             '<option value="recv"'+(s.status==='recv'?' selected':'')+'>Recebida</option>' +
             '<option value="prod"'+(s.status==='prod'?' selected':'')+'>Em Produção</option>' +
             '<option value="edicao"'+(s.status==='edicao'?' selected':'')+'>Em Edição</option>' +
@@ -4307,26 +4338,19 @@ function gestToggleSol(id) {
   if(el) el.classList.toggle('open');
 }
 
-function gestUpdateStatus(affId, idx, newStatus) {
-  var sols = gestGetData(affId,'sols',[]);
-  if(!sols[idx]) return;
-  var sol = sols[idx];
-  sol.status = newStatus;
-  sol.prog   = STATUS_PROG[newStatus] || 0;
-  // Add to sol history
-  if(!sol.hist) sol.hist = [];
-  var step = getStatusStep(newStatus);
-  sol.hist.push({
-    title: step.lbl,
-    time: new Date().toLocaleString('pt-BR'),
-    note: step.notif,
-    done: true
-  });
-  gestSetData(affId,'sols',sols);
-  // Notify afiliado
-  notifyAfiliado(affId, sol.nome, newStatus);
-  gestInit();
+async function gestUpdateStatus(affId, solId, newStatus) {
+  var prog = STATUS_PROG[newStatus] || 0;
+  if(!window.sb){ toast2('Sem conexão com o servidor.'); return; }
+  try{
+    var r = await window.sb.from('requests').update({status:newStatus, prog:prog}).eq('id', solId);
+    if(r.error){ toast2('Erro ao atualizar status: '+r.error.message); return; }
+  }catch(e){ toast2('Erro ao atualizar status.'); return; }
+  // atualiza o mapa local para refletir na hora
+  if(window.gestSolsMap && window.gestSolsMap[affId]){
+    window.gestSolsMap[affId].forEach(function(s){ if(String(s.id)===String(solId)){ s.status=newStatus; s.prog=prog; } });
+  }
   gestOpenAfiliado(affId);
+  if(typeof toast2==='function') toast2('Status atualizado!','ok');
 }
 
 // ── CHAT ──
