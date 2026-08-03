@@ -3978,6 +3978,15 @@ function tgInsertEmoji(e){
   inp.focus();inp.setSelectionRange(pos+e.length,pos+e.length);
   document.getElementById('tg-emoji-picker').classList.remove('show');
 }
+// Emojis no chat do admin (Gestão)
+function gestToggleEmoji(){ var ep=document.getElementById('gest-emoji-picker-'+gestActiveId); if(ep) ep.classList.toggle('show'); }
+function gestInsertEmoji(affId,e){
+  var inp=document.getElementById('gest-inp-'+affId); if(!inp) return;
+  var pos=(inp.selectionStart!=null)?inp.selectionStart:inp.value.length;
+  inp.value=inp.value.slice(0,pos)+e+inp.value.slice(pos);
+  inp.focus(); inp.setSelectionRange(pos+e.length,pos+e.length);
+  var ep=document.getElementById('gest-emoji-picker-'+affId); if(ep) ep.classList.remove('show');
+}
 
 // ════════════════════════════════════════════════
 // MEU PERFIL
@@ -4509,7 +4518,9 @@ function gestRenderChat(affId, affName) {
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'+
       '</button>'+
     '</div>'+
+    '<div class="tg-emoji-picker" id="gest-emoji-picker-'+affId+'"><div class="tg-emoji-grid">'+TG_EMOJIS.map(function(e){return '<button type="button" onclick="gestInsertEmoji(\''+affId+'\',\''+e+'\')">'+e+'</button>';}).join('')+'</div></div>'+
     '<div class="tg-inp-area">'+
+      '<button class="tg-emoji-btn" onclick="gestToggleEmoji()" title="Emoji">😊</button>'+
       '<div class="tg-inp-wrap">'+
         '<textarea class="tg-inp" id="gest-inp-'+affId+'" data-affid="'+affId+'" placeholder="Escreva uma mensagem..." rows="1"'+
           ' onkeydown="gestTgKD(event,this)"'+
@@ -4537,6 +4548,8 @@ async function gestTgRenderMsgs(affId){
   var msgs=[];
   try{ var _r=await window.sb.from('messages').select('*').eq('thread_id',affId).order('ts',{ascending:true}); if(!_r.error) msgs=(_r.data||[]).map(function(x){return {id:x.id,from:x.from_who,text:x.text,ts:x.ts?Number(x.ts):0,edited:!!x.edited,replyTo:x.reply_to||undefined};}); }catch(e){}
   window._gestMsgCache=window._gestMsgCache||{}; window._gestMsgCache[affId]=msgs;
+  try{ localStorage.setItem('hwadmin_seen_'+affId, msgs.filter(function(m){return m.from==='me';}).length); }catch(e){}
+  if(window.updateGestFab) setTimeout(window.updateGestFab,150);
   var aff=AFFILIATES.find(function(a){return a.id===affId;});
   var ai=aff?aff.name.split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase():'?';
   var b64=window._hwLogoB64||'';
@@ -4745,6 +4758,52 @@ function gestTgCtx(affId,msgId,e,isTeam){
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
   <span class="chat-fab-badge" id="chat-fab-badge" style="display:none">0</span>
 </button>
+<button id="gest-fab" onclick="openGestFab()" title="Mensagens dos afiliados" aria-label="Ver mensagens dos afiliados" style="display:none">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+  <span class="chat-fab-badge" id="gest-fab-badge" style="display:none">0</span>
+</button>
+<style>
+#gest-fab{position:fixed;bottom:22px;right:22px;width:58px;height:58px;border-radius:50%;background:var(--gest2,#0EA5E9);color:#fff;border:none;box-shadow:0 8px 24px rgba(0,0,0,.4);cursor:pointer;z-index:400;align-items:center;justify-content:center;transition:transform .15s,box-shadow .15s}
+#gest-fab svg{width:26px;height:26px}
+#gest-fab:hover{transform:translateY(-3px) scale(1.05)}
+#gest-fab:active{transform:scale(.96)}
+#gest-fab.has-unread{animation:fabPulse 2s infinite}
+</style>
+<script>
+(function(){
+  function cu(){return window.CU;}
+  window.updateGestFab=function(){
+    var fab=document.getElementById('gest-fab'); var badge=document.getElementById('gest-fab-badge');
+    if(!fab) return;
+    var c=cu();
+    if(!c || c.role!=='admin' || !window.sb){ fab.style.display='none'; return; }
+    fab.style.display='flex';
+    window.sb.from('messages').select('thread_id,from_who').then(function(r){
+      if(r.error) return;
+      var byThread={}; (r.data||[]).forEach(function(m){ if(m.from_who==='me'){ byThread[m.thread_id]=(byThread[m.thread_id]||0)+1; } });
+      var total=0; window._gestFabThreads=[];
+      Object.keys(byThread).forEach(function(tid){
+        var seen=0; try{ seen=parseInt(localStorage.getItem('hwadmin_seen_'+tid)||'0'); }catch(e){}
+        var u=byThread[tid]-seen; if(u>0){ total+=u; window._gestFabThreads.push(tid); }
+      });
+      if(total>0){ badge.textContent=total>99?'99+':total; badge.style.display='flex'; fab.classList.add('has-unread'); }
+      else { badge.style.display='none'; fab.classList.remove('has-unread'); }
+    });
+  };
+  window.openGestFab=function(){
+    try{ if(typeof goPage==='function'){ var gb=document.getElementById('gest-nav-btn'); goPage('gestao', gb); } }catch(e){}
+    var tid=(window._gestFabThreads&&window._gestFabThreads[0])||null;
+    if(tid){
+      setTimeout(function(){
+        try{ if(typeof gestOpenAfiliado==='function') gestOpenAfiliado(tid); }catch(e){}
+        setTimeout(function(){ var ct=document.querySelector('.gest-tab[data-view="chat"]'); if(ct) ct.click(); }, 150);
+      }, 600);
+    }
+  };
+  setInterval(function(){ if(window.updateGestFab) window.updateGestFab(); }, 4000);
+  setTimeout(function(){ if(window.updateGestFab) window.updateGestFab(); }, 1500);
+})();
+</script>
 <style>
 #chat-fab{position:fixed;bottom:22px;right:22px;width:58px;height:58px;border-radius:50%;background:var(--gold);color:#000;border:none;box-shadow:0 8px 24px rgba(0,0,0,.4);cursor:pointer;z-index:400;align-items:center;justify-content:center;transition:transform .15s,box-shadow .15s}
 #chat-fab svg{width:26px;height:26px}
