@@ -2683,8 +2683,8 @@ function mapReqRow(x){
 async function loadSolsFromDB(){
   if(!window.sb || !window.CU) return;
   try{
-    var r = await window.sb.from('requests').select('*').eq('user_id', window.CU.id).order('created_at',{ascending:false});
-    if(r.error){ console.error('loadSolsFromDB', r.error); return; }
+    var r = await window.sb.from('requests').select('*').order('created_at',{ascending:false});
+    if(r.error){ console.error('loadSolsFromDB', r.error); if(typeof toast2==='function') toast2('Erro ao carregar solicitações: '+r.error.message); return; }
     solicitacoes = (r.data||[]).map(mapReqRow);
     if(typeof renderSols==='function') renderSols();
     if(typeof updateCounts==='function') updateCounts();
@@ -2784,7 +2784,9 @@ async function submitSol(){
   if(btn)btn.disabled=false;
   ["rs-oferta","rs-desc","rs-refs"].forEach(function(id){var el=document.getElementById(id);if(el)el.value="";});
   prio="normal";document.querySelectorAll(".prio-btn").forEach(function(b){b.classList.remove("active");if(b.classList.contains("p-normal"))b.classList.add("active");});
-  await loadSolsFromDB();
+  // Mostra o card na hora (otimista), sem depender da releitura
+  solicitacoes.unshift({ id:row.id, tipo:row.type, oferta:row.offer, nome:row.code, code:row.code, desc:row.description, nicho:row.niche, prio:row.priority, status:'recv', prog:0, date:new Date().toISOString().split('T')[0], hist:[], deliveries:[] });
+  if(typeof renderSols==='function') renderSols();
   toast2("Solicitação "+code+" enviada!","ok");
   goCofreView("sols");
 }
