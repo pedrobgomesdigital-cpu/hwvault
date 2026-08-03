@@ -2797,6 +2797,7 @@ function goPage(pid,btn){
   if(btn)btn.classList.add("active");
   const cr={dash:[{t:"Início"}],biblioteca:[{t:"Biblioteca"}],cofre:[{t:"Meu Cofre"}],spy:[{t:"Spy Intelligence"}],gestao:[{t:"Gestão de Afiliados"}],admin:[{t:"Afiliados"}],upload:[{t:"Publicar Ativo"}]};
   setCrumb(cr[pid]||[{t:pid}]);
+  if(pid==="gestao" && typeof gestInit==="function") gestInit();
   document.getElementById("np").classList.remove("open");
 }
 function toggleCofreNav(){document.getElementById("cofre-subnav").classList.toggle("open");}
@@ -3628,9 +3629,22 @@ function bibAutoFillRows() {
 // ════════════════════════════════════════════════
 var gestActiveId = null;
 
-var AFFILIATES = Object.entries(ACCOUNTS)
-  .filter(function(e){ return e[1].role === 'affiliate'; })
-  .map(function(e){ return { id: e[1].id, name: e[1].name, email: e[0] }; });
+var AFFILIATES = [];  // carregado do banco (tabela profiles) — ver gestLoadAffiliates()
+async function gestLoadAffiliates(){
+  if(!window.sb) return;
+  try{
+    var r = await window.sb.from('profiles').select('id,name,email,role').eq('role','affiliate');
+    if(r.error){ console.error('gestLoadAffiliates', r.error); }
+    else {
+      AFFILIATES = (r.data||[]).map(function(p){ return { id:p.id, name:p.name||(p.email||'').split('@')[0], email:p.email||'' }; });
+      AFFILIATES.sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
+    }
+  }catch(e){ console.error(e); }
+  window.AFFILIATES = AFFILIATES;
+  if(typeof gestRenderList==='function') gestRenderList();
+  var nb=document.getElementById('np-gest');
+  if(nb){ var total=AFFILIATES.reduce(function(acc,a){var sols=gestGetData(a.id,'sols',[]);return acc+sols.filter(function(s){return s.status==='recv';}).length;},0); nb.textContent=total||'0'; }
+}
 
 function gestGetData(affId, key, def) {
   try { var v = localStorage.getItem('hwv5_'+affId+'_'+key); return v ? JSON.parse(v) : def; } catch(e){ return def; }
@@ -4048,16 +4062,7 @@ window.gestClickStatus = function(el){ gestUpdateStatus(el.getAttribute('data-af
 window.gestClickSol    = function(el){ gestToggleSol(el.getAttribute('data-solid')); };
 
 function gestInit() {
-  // Update badge
-  var nb = document.getElementById('np-gest');
-  if(nb) {
-    var total = AFFILIATES.reduce(function(acc,a){
-      var sols = gestGetData(a.id,'sols',[]);
-      return acc + sols.filter(function(s){return s.status==='recv';}).length;
-    },0);
-    nb.textContent = total || '0';
-  }
-  gestRenderList();
+  gestLoadAffiliates();  // carrega afiliados reais do banco e renderiza
   // If chat tab is active, re-render msgs
   var chatTabActive = document.querySelector('.gest-tab.active[data-view="chat"]');
   if(chatTabActive && gestActiveId) setTimeout(function(){ gestTgRenderMsgs(gestActiveId); }, 60);
